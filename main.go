@@ -55,13 +55,83 @@ func todoPost(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(todo)
 }
 
+// Обработчик PUT todos
+func todoUpdate(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	//получаем ID из URL
+	id := r.URL.Path[len("/todos/"):]
+
+	//структура для получения данных от клиента
+	var updatedTodo struct {
+		Title string `json:"title"`
+		Done  bool   `json:"done"`
+	}
+
+	err := json.NewDecoder(r.Body).Decode(&updatedTodo)
+	if err != nil {
+		http.Error(w, `{"error": "Неверный формат"}`, http.StatusBadRequest)
+		return
+	}
+
+	//Ищем задачу и обновляем
+	found := false
+	for i := range todos {
+		if todos[i].ID == id {
+			todos[i].Title = updatedTodo.Title
+			todos[i].Done = updatedTodo.Done
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		http.Error(w, `{"error": "Задача не  найдена"}`, http.StatusNotFound)
+		return
+	}
+
+	json.NewEncoder(w).Encode(todos)
+}
+
+// обработчик delete
+func todoDelete(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	//Получаем ID
+	id := r.URL.Path[len("/todos/"):]
+
+	//ищем индекс задачи
+	index := -1
+	for i := range todos {
+		if todos[i].ID == id {
+			index = i
+			break
+		}
+	}
+
+	if index == -1 {
+		http.Error(w, `{"error": "Задача не найдена"}`, http.StatusNotFound)
+		return
+	}
+
+	//удалчем задачу
+	todos = append(todos[:index], todos[index+1:]...)
+
+	//отправляем обновленный список
+	json.NewEncoder(w).Encode(todos)
+}
+
 func main() {
 	// Регистрируем маршруты
-	http.HandleFunc("/todos", func(w http.ResponseWriter, r *http.Request) {
+	http.HandleFunc("/todos/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == "GET" {
 			todoGet(w, r)
 		} else if r.Method == "POST" {
 			todoPost(w, r)
+		} else if r.Method == "DELETE" {
+			todoDelete(w, r)
+		} else if r.Method == "PUT" {
+			todoUpdate(w, r)
 		} else {
 			http.Error(w, `{"error": "Метод не поддерживается"}`, http.StatusMethodNotAllowed)
 		}
