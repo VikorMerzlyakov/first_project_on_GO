@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"strconv"
 )
 
 // Структура todo
@@ -15,6 +17,35 @@ type Todo struct {
 
 var todos []Todo
 var nextID = 1
+
+// сохраняю данные с сервера в файл
+func saveTodosToFile(todos []Todo) error {
+	file, err := os.Create("todos.json")
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	encoder := json.NewEncoder(file)
+	return encoder.Encode(todos)
+}
+
+// загружаю данные из файла
+func loadTodosFromFile() ([]Todo, error) {
+	file, err := os.Open("todos.json")
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	var todos []Todo
+	decoder := json.NewDecoder(file)
+	err = decoder.Decode(&todos)
+	if err != nil {
+		return nil, err
+	}
+	return todos, nil
+}
 
 // Обработчик для "/todos" GET
 func todoGet(w http.ResponseWriter, r *http.Request) {
@@ -53,6 +84,11 @@ func todoPost(w http.ResponseWriter, r *http.Request) {
 	//Возвращаем созданную задачу с кодом 201 Created
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(todo)
+
+	err = saveTodosToFile(todos)
+	if err != nil {
+		http.Error(w, `{"error":"Не удалось сохранить данные"}`, http.StatusInternalServerError)
+	}
 }
 
 // Обработчик PUT todos
@@ -91,6 +127,11 @@ func todoUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	json.NewEncoder(w).Encode(todos)
+
+	err = saveTodosToFile(todos)
+	if err != nil {
+		http.Error(w, `{"error":"Не удалось сохранить данные"}`, http.StatusInternalServerError)
+	}
 }
 
 // обработчик delete
@@ -119,9 +160,29 @@ func todoDelete(w http.ResponseWriter, r *http.Request) {
 
 	//отправляем обновленный список
 	json.NewEncoder(w).Encode(todos)
+
+	err := saveTodosToFile(todos)
+	if err != nil {
+		http.Error(w, `{"error":"Не удалось сохранить данные"}`, http.StatusInternalServerError)
+	}
 }
 
 func main() {
+	//Загружаем данные из файла
+	loadedTodos, err := loadTodosFromFile()
+	if err == nil {
+		todos = loadedTodos
+		for _, t := range todos {
+			id, _ := strconv.Atoi(t.ID)
+			if id >= nextID {
+				nextID = id + 1
+			}
+		}
+	} else {
+		fmt.Println("Не удалось загрузить задачи: ", err)
+		todos = []Todo{}
+		nextID = 1
+	}
 	// Регистрируем маршруты
 	http.HandleFunc("/todos/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == "GET" {
@@ -139,7 +200,7 @@ func main() {
 
 	// Запускаем сервер
 	fmt.Println("Сервер запущен на http://localhost:8080")
-	err := http.ListenAndServe(":8080", nil)
+	err = http.ListenAndServe(":8080", nil)
 	if err != nil {
 		fmt.Println("Ошибка запуска сервера:", err)
 	}
