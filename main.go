@@ -4,195 +4,140 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
 	"strconv"
+
+	"gorm.io/driver/postgres"
+	"gorm.io/gorm"
 )
+
+func connectDB() *gorm.DB {
+	dsn := "host=localhost user=postgres password=1234 dbname=todos_db port=5432 sslmode=disable"
+	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	if err != nil {
+		panic("Не удалось подключится к БД")
+	}
+
+	db.AutoMigrate(&Todo{})
+	return db
+}
 
 // Структура todo
 type Todo struct {
-	ID    string `json:"id"`
+	ID    string `json:"id" gorm:"primaryKey"`
 	Title string `json:"title"`
 	Done  bool   `json:"done"`
 }
 
-var todos []Todo
 var nextID = 1
 
-// сохраняю данные с сервера в файл
-func saveTodosToFile(todos []Todo) error {
-	file, err := os.Create("todos.json")
-	if err != nil {
-		return err
-	}
-	defer file.Close()
+func generateID(db *gorm.DB) string {
+	var maxID int64 = 1
+	var last Todo
+	db.Last(&last)
 
-	encoder := json.NewEncoder(file)
-	return encoder.Encode(todos)
-}
-
-// загружаю данные из файла
-func loadTodosFromFile() ([]Todo, error) {
-	file, err := os.Open("todos.json")
-	if err != nil {
-		return nil, err
+	if id, _ := strconv.ParseInt(last.ID, 10, 64); id > 0 {
+		maxID = id + 1
 	}
-	defer file.Close()
-
-	var todos []Todo
-	decoder := json.NewDecoder(file)
-	err = decoder.Decode(&todos)
-	if err != nil {
-		return nil, err
-	}
-	return todos, nil
+	return fmt.Sprintf("%d", maxID)
 }
 
 // Обработчик для "/todos" GET
-func todoGet(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(todos)
+func todoGet(db *gorm.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		var todos []Todo
+		db.Find(&todos)
+		json.NewEncoder(w).Encode(todos)
+	}
 }
 
 // Обработчик для "/todos" POST
-func todoPost(w http.ResponseWriter, r *http.Request) {
-	//Устанавливаю заголовок JSON
-	w.Header().Set("Content-Type", "application/json")
+func todoPost(db *gorm.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
 
-	// Структура для получения данных от клиента
-	var newTodo struct {
-		Title string `json:"title"`
-	}
+		var newTodo struct {
+			Title string `json:"title"`
+		}
 
-	//Декодирую JSON из тела запроса
-	err := json.NewDecoder(r.Body).Decode(&newTodo)
-	if err != nil || newTodo.Title == "" {
-		http.Error(w, `{"error": "Неверный формат или отсутствует поле title"}`, http.StatusBadRequest)
-		return
-	}
+		err := json.NewDecoder(r.Body).Decode(&newTodo)
+		if err != nil || newTodo.Title == "" {
+			http.Error(w, `{"error": "Неверный формат или отсутствует поле title"}`, http.StatusBadRequest)
+			return
+		}
 
-	//Создаю новую задачу
-	todo := Todo{
-		ID:    fmt.Sprintf("%d", nextID),
-		Title: newTodo.Title,
-		Done:  false,
-	}
+		todo := Todo{
+			ID:    generateID(db),
+			Title: newTodo.Title,
+			Done:  false,
+		}
 
-	//Добавляем в список
-	todos = append(todos, todo)
-	nextID++
-
-	//Возвращаем созданную задачу с кодом 201 Created
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(todo)
-
-	err = saveTodosToFile(todos)
-	if err != nil {
-		http.Error(w, `{"error":"Не удалось сохранить данные"}`, http.StatusInternalServerError)
+		db.Create(&todo)
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(todo)
 	}
 }
 
 // Обработчик PUT todos
-func todoUpdate(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-
-	//получаем ID из URL
-	id := r.URL.Path[len("/todos/"):]
-
-	//структура для получения данных от клиента
-	var updatedTodo struct {
-		Title string `json:"title"`
-		Done  bool   `json:"done"`
-	}
-
-	err := json.NewDecoder(r.Body).Decode(&updatedTodo)
-	if err != nil {
-		http.Error(w, `{"error": "Неверный формат"}`, http.StatusBadRequest)
-		return
-	}
-
-	//Ищем задачу и обновляем
-	found := false
-	for i := range todos {
-		if todos[i].ID == id {
-			todos[i].Title = updatedTodo.Title
-			todos[i].Done = updatedTodo.Done
-			found = true
-			break
+func todoUpdate(db *gorm.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+		id := r.URL.Path[len("/todos/"):]
+		var updatedTodo struct {
+			Title string `json:"title"`
+			Done  bool   `json:"done"`
 		}
-	}
 
-	if !found {
-		http.Error(w, `{"error": "Задача не  найдена"}`, http.StatusNotFound)
-		return
-	}
+		err := json.NewDecoder(r.Body).Decode(&updatedTodo)
+		if err != nil {
+			http.Error(w, `{"error": "Неверный формат запроса"}`, http.StatusBadRequest)
+			return
+		}
 
-	json.NewEncoder(w).Encode(todos)
+		var todo Todo
+		result := db.First(&todo, "id = ?", id)
+		if result.Error != nil {
+			http.Error(w, `{"error": "Задача не найдена"}`, http.StatusNotFound)
+			return
+		}
 
-	err = saveTodosToFile(todos)
-	if err != nil {
-		http.Error(w, `{"error":"Не удалось сохранить данные"}`, http.StatusInternalServerError)
+		todo.Title = updatedTodo.Title
+		todo.Done = updatedTodo.Done
+		db.Save(&todo)
+
+		json.NewEncoder(w).Encode(todo)
 	}
 }
 
 // обработчик delete
-func todoDelete(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
+func todoDelete(db *gorm.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.URL.Path[len("/todos/"):]
+		var todo Todo
 
-	//Получаем ID
-	id := r.URL.Path[len("/todos/"):]
-
-	//ищем индекс задачи
-	index := -1
-	for i := range todos {
-		if todos[i].ID == id {
-			index = i
-			break
+		result := db.Where("id = ?", id).Delete(&todo)
+		if result.Error != nil || result.RowsAffected == 0 {
+			http.Error(w, `{"error": "Задача не найдена"}`, http.StatusNotFound)
+			return
 		}
-	}
 
-	if index == -1 {
-		http.Error(w, `{"error": "Задача не найдена"}`, http.StatusNotFound)
-		return
-	}
-
-	//удалчем задачу
-	todos = append(todos[:index], todos[index+1:]...)
-
-	//отправляем обновленный список
-	json.NewEncoder(w).Encode(todos)
-
-	err := saveTodosToFile(todos)
-	if err != nil {
-		http.Error(w, `{"error":"Не удалось сохранить данные"}`, http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{"status": "deleted"})
 	}
 }
 
 func main() {
-	//Загружаем данные из файла
-	loadedTodos, err := loadTodosFromFile()
-	if err == nil {
-		todos = loadedTodos
-		for _, t := range todos {
-			id, _ := strconv.Atoi(t.ID)
-			if id >= nextID {
-				nextID = id + 1
-			}
-		}
-	} else {
-		fmt.Println("Не удалось загрузить задачи: ", err)
-		todos = []Todo{}
-		nextID = 1
-	}
+	db := connectDB()
 	// Регистрируем маршруты
 	http.HandleFunc("/todos/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == "GET" {
-			todoGet(w, r)
+			todoGet(db)(w, r)
 		} else if r.Method == "POST" {
-			todoPost(w, r)
+			todoPost(db)(w, r)
 		} else if r.Method == "DELETE" {
-			todoDelete(w, r)
+			todoDelete(db)(w, r)
 		} else if r.Method == "PUT" {
-			todoUpdate(w, r)
+			todoUpdate(db)(w, r)
 		} else {
 			http.Error(w, `{"error": "Метод не поддерживается"}`, http.StatusMethodNotAllowed)
 		}
@@ -200,7 +145,7 @@ func main() {
 
 	// Запускаем сервер
 	fmt.Println("Сервер запущен на http://localhost:8080")
-	err = http.ListenAndServe(":8080", nil)
+	err := http.ListenAndServe(":8080", nil)
 	if err != nil {
 		fmt.Println("Ошибка запуска сервера:", err)
 	}
