@@ -31,14 +31,19 @@ type Todo struct {
 var nextID = 1
 
 func generateID(db *gorm.DB) string {
-	var maxID int64 = 1
+	//var maxID int64 = 1
 	var last Todo
-	db.Last(&last)
-
-	if id, _ := strconv.ParseInt(last.ID, 10, 64); id > 0 {
-		maxID = id + 1
+	result := db.Order("id DESC").First(&last)
+	if result.Error != nil {
+		return "1"
 	}
-	return fmt.Sprintf("%d", maxID)
+
+	id, err := strconv.ParseInt(last.ID, 10, 64)
+	if err != nil || id < 1 {
+		return "1"
+	}
+
+	return strconv.FormatInt(id+1, 10)
 }
 
 // Обработчик для "/todos" GET
