@@ -1,0 +1,7 @@
+-- migrate Up 
+CREATE TABLE IF NOT EXISTS todos (
+id TEXT PRIMARY KEY,
+title TEXT NOT NULL,
+done BOOLEAN NOT NULL DEFAULT FALSE 
+);
+
